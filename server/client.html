@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Order Book Simulator</title>
+<style>
+  body { background:#0d1117; color:#e6edf3; font-family: ui-monospace, monospace; margin:0; padding:24px; }
+  h1 { font-size:20px; }
+  .wrap { display:grid; grid-template-columns: 320px 320px; gap:24px; }
+  table { width:100%; border-collapse:collapse; }
+  td,th { padding:3px 8px; text-align:right; }
+  .ask { color:#f85149; } .bid { color:#3fb950; }
+  .bar { display:inline-block; height:12px; opacity:.3; }
+  .ask .bar { background:#f85149; } .bid .bar { background:#3fb950; }
+  #mid { text-align:center; font-size:18px; margin:8px 0; }
+  form { margin-top:16px; }
+  input,select,button { background:#161b22; color:#e6edf3; border:1px solid #30363d; border-radius:6px; padding:6px; }
+  button { background:#1f6feb; border:none; cursor:pointer; }
+  #tape div { font-size:12px; }
+</style>
+</head>
+<body>
+<h1>Order Book Simulator — SIM</h1>
+<div class="wrap">
+  <div>
+    <table id="asks"></table>
+    <div id="mid"></div>
+    <table id="bids"></table>
+    <form id="orderForm">
+      <select id="side"><option value="buy">BUY</option><option value="sell">SELL</option></select>
+      <select id="otype"><option value="limit">LIMIT</option><option value="market">MARKET</option></select>
+      <input id="qty" type="number" value="5" style="width:60px" />
+      <input id="price" type="number" value="100" step="0.05" style="width:80px" />
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  <div>
+    <h3>Trade tape</h3>
+    <div id="tape"></div>
+  </div>
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const tape = document.getElementById("tape");
+let maxVol = 1;
+
+function row(side, price, vol) {
+  const w = Math.min(100, (vol / maxVol) * 100);
+  return `<tr class="${side}"><td>${vol}</td><td>${price.toFixed(2)}</td>
+    <td><span class="bar" style="width:${w}px"></span></td></tr>`;
+}
+
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.type !== "state") return;
+  const d = msg.depth;
+  maxVol = Math.max(1, ...d.bids.map(b=>b[1]), ...d.asks.map(a=>a[1]));
+  document.getElementById("asks").innerHTML =
+    d.asks.slice().reverse().map(a => row("ask", a[0], a[1])).join("");
+  document.getElementById("bids").innerHTML =
+    d.bids.map(b => row("bid", b[0], b[1])).join("");
+  const spread = (d.best_ask && d.best_bid) ? (d.best_ask - d.best_bid).toFixed(2) : "—";
+  document.getElementById("mid").textContent =
+    `bid ${d.best_bid ?? "—"}  |  ask ${d.best_ask ?? "—"}  |  spread ${spread}  |  last ${d.last_trade ?? "—"}`;
+  for (const t of msg.trades) {
+    const el = document.createElement("div");
+    el.className = t.aggressor === "buy" ? "bid" : "ask";
+    el.textContent = `${t.aggressor.toUpperCase()} ${t.quantity} @ ${t.price.toFixed(2)}`;
+    tape.prepend(el);
+  }
+  while (tape.children.length > 40) tape.lastChild.remove();
+};
+
+document.getElementById("orderForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {
+    side: side.value,
+    quantity: parseInt(qty.value),
+    order_type: otype.value,
+    price: otype.value === "market" ? null : parseFloat(price.value),
+  };
+  await fetch("/order", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(body),
+  });
+};
+</script>
+</body>
+</html>
